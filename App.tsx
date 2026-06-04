@@ -1,45 +1,53 @@
-/**
- * Sample React Native App
- * https://github.com/facebook/react-native
- *
- * @format
- */
+import React from 'react';
+import { NavigationContainer } from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
-import { NewAppScreen } from '@react-native/new-app-screen';
-import { StatusBar, StyleSheet, useColorScheme, View } from 'react-native';
-import {
-  SafeAreaProvider,
-  useSafeAreaInsets,
-} from 'react-native-safe-area-context';
+import OnboardingScreen from './src/screens/OnboardingScreen';
+import LoginScreen from './src/screens/LoginScreen';
+import HomeScreen from './src/screens/HomeScreen';
+// ─── Stack param list ─────────────────────────────────────────────────────────
+export type RootStackParamList = {
+  Onboarding: undefined;
+  Login: undefined;
+  Home:undefined;
+};
 
-function App() {
-  const isDarkMode = useColorScheme() === 'dark';
+const Stack = createNativeStackNavigator<RootStackParamList>();
 
+// ─── App ──────────────────────────────────────────────────────────────────────
+export default function App() {
   return (
-    <SafeAreaProvider>
-      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
-      <AppContent />
-    </SafeAreaProvider>
+    <NavigationContainer>
+      <Stack.Navigator
+        initialRouteName="Onboarding"
+        screenOptions={{ headerShown: false, animation: 'slide_from_right' }}
+      >
+        <Stack.Screen name="Onboarding">
+          {(props) => (
+            <OnboardingScreen
+              onGetStarted={() => props.navigation.navigate('Login')}
+              onSkip={() => props.navigation.navigate('Login')}
+            />
+          )}
+        </Stack.Screen>
+
+        <Stack.Screen name="Login">
+          {(props) => (
+            <LoginScreen
+              onContinue={(name, phone) => {
+                props.navigation.navigate('Home')
+                // TODO: navigate to OTP screen
+                console.log('Continue →', name, phone);
+              }}
+              onBack={() => props.navigation.goBack()}
+            />
+          )}
+        </Stack.Screen>
+
+        <Stack.Screen name = "Home" component = {HomeScreen}/>
+
+
+      </Stack.Navigator>
+    </NavigationContainer>
   );
 }
-
-function AppContent() {
-  const safeAreaInsets = useSafeAreaInsets();
-
-  return (
-    <View style={styles.container}>
-      <NewAppScreen
-        templateFileName="App.tsx"
-        safeAreaInsets={safeAreaInsets}
-      />
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-});
-
-export default App;
