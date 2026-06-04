@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import auth from '@react-native-firebase/auth';
 
 import OnboardingScreen from './src/screens/OnboardingScreen';
 import LoginScreen from './src/screens/LoginScreen';
@@ -24,10 +25,11 @@ const Tab = createBottomTabNavigator();
 function MainTabs() {
   return (
     <Tab.Navigator
+      initialRouteName="Home"
       screenOptions={{
         headerShown: false,
       }}
-      tabBar={(props) => {
+      tabBar={props => {
         const routeName =
           props.state.routes[props.state.index].name;
 
@@ -77,50 +79,75 @@ function MainTabs() {
 }
 
 export default function App() {
+  const [user, setUser] = useState<any>(null);
+  const [initializing, setInitializing] = useState(true);
+
+  useEffect(() => {
+    const subscriber = auth().onAuthStateChanged(
+      firebaseUser => {
+        setUser(firebaseUser);
+
+        if (initializing) {
+          setInitializing(false);
+        }
+      },
+    );
+
+    return subscriber;
+  }, [initializing]);
+
+  if (initializing) {
+    return null;
+  }
+
   return (
     <NavigationContainer>
       <Stack.Navigator
-        initialRouteName="Onboarding"
         screenOptions={{
           headerShown: false,
           animation: 'slide_from_right',
         }}
       >
-        {/* Onboarding */}
-        <Stack.Screen name="Onboarding">
-          {(props) => (
-            <OnboardingScreen
-              onGetStarted={() =>
-                props.navigation.navigate('Login')
-              }
-              onSkip={() =>
-                props.navigation.navigate('Login')
-              }
-            />
-          )}
-        </Stack.Screen>
+        {user ? (
+          <Stack.Screen
+            name="MainTabs"
+            component={MainTabs}
+          />
+        ) : (
+          <>
+            <Stack.Screen name="Onboarding">
+              {props => (
+                <OnboardingScreen
+                  onGetStarted={() =>
+                    props.navigation.navigate(
+                      'Login',
+                    )
+                  }
+                  onSkip={() =>
+                    props.navigation.navigate(
+                      'Login',
+                    )
+                  }
+                />
+              )}
+            </Stack.Screen>
 
-        {/* Login */}
-        <Stack.Screen name="Login">
-          {(props) => (
-            <LoginScreen
-              onContinue={(name, phone) => {
-                console.log(name, phone);
-
-                props.navigation.replace('MainTabs');
-              }}
-              onBack={() =>
-                props.navigation.goBack()
-              }
-            />
-          )}
-        </Stack.Screen>
-
-        {/* Tabs */}
-        <Stack.Screen
-          name="MainTabs"
-          component={MainTabs}
-        />
+            <Stack.Screen name="Login">
+              {props => (
+                <LoginScreen
+                  onContinue={() => {
+                    // No navigation needed
+                    // Firebase auth state listener
+                    // will automatically open MainTabs
+                  }}
+                  onBack={() =>
+                    props.navigation.goBack()
+                  }
+                />
+              )}
+            </Stack.Screen>
+          </>
+        )}
       </Stack.Navigator>
     </NavigationContainer>
   );
