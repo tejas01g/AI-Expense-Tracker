@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   StatusBar,
   Animated,
-  SafeAreaView,
   TextInput,
   KeyboardAvoidingView,
   Platform,
@@ -14,6 +13,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface LoginScreenProps {
