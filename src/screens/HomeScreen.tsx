@@ -4,10 +4,10 @@ import {
   Text,
   StyleSheet,
   FlatList,
-  SafeAreaView,
   TouchableOpacity,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const weeklyData = [
   { day: 'Mon', value: 40 },
@@ -39,6 +39,8 @@ const expenses = [
 
 const HomeScreen = () => {
   const sections = ['content'];
+  const insets = useSafeAreaInsets();
+
 
   const renderContent = () => (
     <>
@@ -174,7 +176,7 @@ const HomeScreen = () => {
         renderItem={renderContent}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{
-          paddingBottom: 40,
+          paddingBottom: insets.bottom + 90,
         }}
       />
     </SafeAreaView>
