@@ -21,7 +21,7 @@ import firestore from '@react-native-firebase/firestore';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface LoginScreenProps {
-  onContinue?: (name: string, phone: string) => void; // App.tsx handles navigation
+  onContinue?: (name: string, phone: string) => void;
   onBack?: () => void;
 }
 
@@ -29,20 +29,66 @@ interface LoginScreenProps {
 const COUNTRY_CODE = '+91';
 const FLAG = '🇮🇳';
 const OTP_LENGTH = 6;
-const RESEND_COOLDOWN = 30; // seconds
+const RESEND_COOLDOWN = 30;
+
+// ─── Helper: human-readable Firebase error messages ──────────────────────────
+const getFirebaseErrorMessage = (error: any): string => {
+  const code: string = error?.code ?? '';
+  switch (code) {
+    case 'auth/invalid-phone-number':
+      return 'Invalid phone number. Please check and try again.';
+    case 'auth/too-many-requests':
+      return 'Too many attempts. Please wait a few minutes and try again.';
+    case 'auth/quota-exceeded':
+      return 'SMS quota exceeded. Please try again later.';
+    case 'auth/network-request-failed':
+      return 'Network error. Please check your connection.';
+    case 'auth/operation-not-allowed':
+      return 'Phone sign-in is not enabled. Contact support.';
+    case 'auth/invalid-verification-code':
+      return 'Incorrect OTP. Please check and try again.';
+    case 'auth/code-expired':
+      return 'OTP has expired. Please request a new one.';
+    case 'auth/missing-verification-code':
+      return 'Please enter the complete 6-digit OTP.';
+    default:
+      return 'Something went wrong. Please try again.';
+  }
+};
 
 // ─── OTP Box Component ────────────────────────────────────────────────────────
 interface OTPInputProps {
   otp: string[];
   onOtpChange: (otp: string[]) => void;
   hasError: boolean;
+  disabled?: boolean;
 }
 
-const OTPInput: React.FC<OTPInputProps> = ({ otp, onOtpChange, hasError }) => {
+const OTPInput: React.FC<OTPInputProps> = ({
+  otp,
+  onOtpChange,
+  hasError,
+  disabled,
+}) => {
   const inputRefs = useRef<(TextInput | null)[]>([]);
 
   const handleChange = (text: string, index: number) => {
-    const digit = text.replace(/\D/g, '').slice(-1);
+    // Handle paste: if user pastes 6 digits at once
+    const cleaned = text.replace(/\D/g, '');
+    if (cleaned.length > 1) {
+      const digits = cleaned.slice(0, OTP_LENGTH).split('');
+      const newOtp = Array(OTP_LENGTH).fill('');
+      digits.forEach((d, i) => {
+        newOtp[i] = d;
+      });
+      onOtpChange(newOtp);
+      // Focus last filled box or last box
+      const lastIdx = Math.min(digits.length - 1, OTP_LENGTH - 1);
+      inputRefs.current[lastIdx]?.focus();
+      return;
+    }
+
+    const digit = cleaned.slice(-1);
     const newOtp = [...otp];
     newOtp[index] = digit;
     onOtpChange(newOtp);
@@ -52,11 +98,19 @@ const OTPInput: React.FC<OTPInputProps> = ({ otp, onOtpChange, hasError }) => {
   };
 
   const handleKeyPress = (key: string, index: number) => {
-    if (key === 'Backspace' && !otp[index] && index > 0) {
-      const newOtp = [...otp];
-      newOtp[index - 1] = '';
-      onOtpChange(newOtp);
-      inputRefs.current[index - 1]?.focus();
+    if (key === 'Backspace') {
+      if (otp[index]) {
+        // Clear current box
+        const newOtp = [...otp];
+        newOtp[index] = '';
+        onOtpChange(newOtp);
+      } else if (index > 0) {
+        // Move to previous box and clear it
+        const newOtp = [...otp];
+        newOtp[index - 1] = '';
+        onOtpChange(newOtp);
+        inputRefs.current[index - 1]?.focus();
+      }
     }
   };
 
@@ -65,20 +119,23 @@ const OTPInput: React.FC<OTPInputProps> = ({ otp, onOtpChange, hasError }) => {
       {Array.from({ length: OTP_LENGTH }).map((_, i) => (
         <TextInput
           key={i}
-          ref={(ref) => { inputRefs.current[i] = ref; }}
+          ref={ref => {
+            inputRefs.current[i] = ref;
+          }}
           style={[
             otpStyles.box,
             otp[i] ? otpStyles.boxFilled : null,
             hasError ? otpStyles.boxError : null,
           ]}
           value={otp[i] || ''}
-          onChangeText={(t) => handleChange(t, i)}
+          onChangeText={t => handleChange(t, i)}
           onKeyPress={({ nativeEvent }) => handleKeyPress(nativeEvent.key, i)}
           keyboardType="number-pad"
-          maxLength={1}
+          maxLength={OTP_LENGTH} // Allow paste of full OTP
           textAlign="center"
           selectionColor="#A855F7"
           caretHidden
+          editable={!disabled}
         />
       ))}
     </View>
@@ -132,7 +189,9 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onContinue, onBack }) => {
   const [resendCooldown, setResendCooldown] = useState(0);
 
   // Firebase confirmation result ref
-  const confirmationRef = useRef<FirebaseAuthTypes.ConfirmationResult | null>(null);
+  const confirmationRef = useRef<FirebaseAuthTypes.ConfirmationResult | null>(
+    null,
+  );
   const cooldownTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Animations
@@ -145,8 +204,16 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onContinue, onBack }) => {
 
   useEffect(() => {
     Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
-      Animated.timing(slideAnim, { toValue: 0, duration: 600, useNativeDriver: true }),
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 600,
+        useNativeDriver: true,
+      }),
+      Animated.timing(slideAnim, {
+        toValue: 0,
+        duration: 600,
+        useNativeDriver: true,
+      }),
     ]).start();
 
     return () => {
@@ -171,8 +238,20 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onContinue, onBack }) => {
     }).start();
   }, [phoneFocused, phone]);
 
+  // ─── Auto-submit OTP when all digits filled ──────────────────────────────
+  useEffect(() => {
+    if (otp.every(d => d !== '') && otpVisible && !otpLoading) {
+      // Small delay so user can see all boxes filled before submit
+      const timer = setTimeout(() => {
+        handleVerifyOtp();
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [otp]);
+
   // Modal slide-in animation
   const openModal = useCallback(() => {
+    modalSlideAnim.setValue(400); // Reset before animating
     setOtpVisible(true);
     Animated.spring(modalSlideAnim, {
       toValue: 0,
@@ -183,6 +262,9 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onContinue, onBack }) => {
   }, []);
 
   const closeModal = useCallback(() => {
+    // Don't allow closing while OTP verification is in progress
+    if (otpLoading) return;
+
     Animated.timing(modalSlideAnim, {
       toValue: 400,
       duration: 260,
@@ -192,25 +274,47 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onContinue, onBack }) => {
       setOtp(Array(OTP_LENGTH).fill(''));
       setOtpError('');
     });
-  }, []);
+  }, [otpLoading]);
 
   // Shake animation for wrong OTP
   const triggerShake = useCallback(() => {
     shakeAnim.setValue(0);
     Animated.sequence([
-      Animated.timing(shakeAnim, { toValue: 8, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: -8, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 8, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 0, duration: 60, useNativeDriver: true }),
+      Animated.timing(shakeAnim, {
+        toValue: 8,
+        duration: 60,
+        useNativeDriver: true,
+      }),
+      Animated.timing(shakeAnim, {
+        toValue: -8,
+        duration: 60,
+        useNativeDriver: true,
+      }),
+      Animated.timing(shakeAnim, {
+        toValue: 8,
+        duration: 60,
+        useNativeDriver: true,
+      }),
+      Animated.timing(shakeAnim, {
+        toValue: 0,
+        duration: 60,
+        useNativeDriver: true,
+      }),
     ]).start();
   }, []);
 
   const startResendCooldown = useCallback(() => {
+    // Clear any existing timer before starting a new one
+    if (cooldownTimer.current) {
+      clearInterval(cooldownTimer.current);
+      cooldownTimer.current = null;
+    }
     setResendCooldown(RESEND_COOLDOWN);
     cooldownTimer.current = setInterval(() => {
-      setResendCooldown((prev) => {
+      setResendCooldown(prev => {
         if (prev <= 1) {
           clearInterval(cooldownTimer.current!);
+          cooldownTimer.current = null;
           return 0;
         }
         return prev - 1;
@@ -227,7 +331,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onContinue, onBack }) => {
     } else {
       setNameError('');
     }
-    const digits = phone.replace(/\s/g, '');
+    const digits = phone.replace(/\D/g, '');
     if (digits.length < 10) {
       setPhoneError('Enter a valid 10-digit number');
       valid = false;
@@ -239,21 +343,30 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onContinue, onBack }) => {
 
   // ─── Send OTP via Firebase ───────────────────────────────────────────────────
   const handleContinue = async () => {
+    // Guard: don't fire if form not ready or already loading
+    if (loading) return;
     if (!validate()) return;
+
     setLoading(true);
+    setPhoneError('');
+
     try {
-      const fullPhone = `${COUNTRY_CODE}${phone.replace(/\s/g, '')}`;
+      const rawDigits = phone.replace(/\D/g, '');
+      const fullPhone = `${COUNTRY_CODE}${rawDigits}`;
+
+      console.log('[OTP] Sending to:', fullPhone);
+
       const confirmation = await auth().signInWithPhoneNumber(fullPhone);
       confirmationRef.current = confirmation;
+
+      console.log('[OTP] Sent successfully, opening modal');
+
       openModal();
       startResendCooldown();
     } catch (error: any) {
-      console.error('OTP send error:', error);
-      setPhoneError(
-        error?.code === 'auth/invalid-phone-number'
-          ? 'Invalid phone number format'
-          : 'Failed to send OTP. Try again.'
-      );
+      console.error('[OTP] Send error code:', error?.code);
+      console.error('[OTP] Send error message:', error?.message);
+      setPhoneError(getFirebaseErrorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -262,83 +375,110 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onContinue, onBack }) => {
   // ─── Resend OTP ──────────────────────────────────────────────────────────────
   const handleResend = async () => {
     if (resendCooldown > 0) return;
+
+    setOtpError('');
+    setOtp(Array(OTP_LENGTH).fill(''));
+
     try {
-      const fullPhone = `${COUNTRY_CODE}${phone.replace(/\s/g, '')}`;
+      const rawDigits = phone.replace(/\D/g, '');
+      const fullPhone = `${COUNTRY_CODE}${rawDigits}`;
+
+      console.log('[OTP] Resending to:', fullPhone);
+
       const confirmation = await auth().signInWithPhoneNumber(fullPhone);
       confirmationRef.current = confirmation;
-      setOtp(Array(OTP_LENGTH).fill(''));
-      setOtpError('');
       startResendCooldown();
-    } catch {
-      setOtpError('Failed to resend OTP. Please try again.');
+    } catch (error: any) {
+      console.error('[OTP] Resend error:', error?.code);
+      setOtpError(getFirebaseErrorMessage(error));
     }
   };
 
   // ─── Verify OTP & Save to Firestore ─────────────────────────────────────────
   const handleVerifyOtp = async () => {
     const otpCode = otp.join('');
+
     if (otpCode.length < OTP_LENGTH) {
       setOtpError('Please enter the complete 6-digit OTP');
       triggerShake();
       return;
     }
+
     if (!confirmationRef.current) {
-      setOtpError('Session expired. Please go back and try again.');
+      setOtpError('Session expired. Please go back and request a new OTP.');
       return;
     }
+
+    // Prevent double submission
+    if (otpLoading) return;
 
     setOtpLoading(true);
     setOtpError('');
 
     try {
+      console.log('[OTP] Verifying code:', otpCode);
+
       // 1. Verify OTP with Firebase Auth
       const userCredential = await confirmationRef.current.confirm(otpCode);
       const uid = userCredential?.user?.uid;
-      if (!uid) throw new Error('No UID returned');
 
-      // 2. Save user details to Firestore users collection
-      await firestore().collection('users').doc(uid).set(
-        {
-          uid,
-          name: name.trim(),
-          phone: `${COUNTRY_CODE}${phone.replace(/\s/g, '')}`,
-          createdAt: firestore.FieldValue.serverTimestamp(),
-          updatedAt: firestore.FieldValue.serverTimestamp(),
-        },
-        { merge: true } // merge: true — won't overwrite existing data on re-login
-      );
+      if (!uid) throw new Error('No UID returned from Firebase');
 
-      // 3. Close modal → let App.tsx handle navigation via onContinue callback
-    closeModal();
+      console.log('[OTP] Verified. UID:', uid);
 
-onContinue?.(
-  name.trim(),
-  phone.replace(/\s/g, ''),
-);
+      // 2. Save user details to Firestore
+      await firestore()
+        .collection('users')
+        .doc(uid)
+        .set(
+          {
+            uid,
+            name: name.trim(),
+            phone: `${COUNTRY_CODE}${phone.replace(/\D/g, '')}`,
+            createdAt: firestore.FieldValue.serverTimestamp(),
+            updatedAt: firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true },
+        );
+
+      console.log('[OTP] User saved to Firestore');
+
+      // 3. Close modal → navigate via callback
+      closeModal();
+      onContinue?.(name.trim(), phone.replace(/\D/g, ''));
     } catch (error: any) {
-      console.error('OTP verify error:', error);
+      console.error('[OTP] Verify error code:', error?.code);
+      console.error('[OTP] Verify error message:', error?.message);
       triggerShake();
-      if (
-        error?.code === 'auth/invalid-verification-code' ||
-        error?.code === 'auth/code-expired'
-      ) {
-        setOtpError('Invalid or expired OTP. Please try again.');
-      } else {
-        setOtpError('Verification failed. Please try again.');
-      }
+      setOtpError(getFirebaseErrorMessage(error));
+      // Clear OTP so user can re-enter
+      setOtp(Array(OTP_LENGTH).fill(''));
     } finally {
       setOtpLoading(false);
     }
   };
 
-  const isReady = name.trim().length >= 2 && phone.replace(/\s/g, '').length === 10;
-  const isOtpFilled = otp.every((d) => d !== '');
+  const isReady =
+    name.trim().length >= 2 && phone.replace(/\D/g, '').length === 10;
+  const isOtpFilled = otp.every(d => d !== '');
 
   // Floating label interpolations
-  const nameLabelTop = nameLabelAnim.interpolate({ inputRange: [0, 1], outputRange: [17, 4] });
-  const nameLabelSize = nameLabelAnim.interpolate({ inputRange: [0, 1], outputRange: [15, 11] });
-  const phoneLabelTop = phoneLabelAnim.interpolate({ inputRange: [0, 1], outputRange: [17, 4] });
-  const phoneLabelSize = phoneLabelAnim.interpolate({ inputRange: [0, 1], outputRange: [15, 11] });
+  const nameLabelTop = nameLabelAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [17, 4],
+  });
+  const nameLabelSize = nameLabelAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [15, 11],
+  });
+  const phoneLabelTop = phoneLabelAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [17, 4],
+  });
+  const phoneLabelSize = phoneLabelAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [15, 11],
+  });
 
   return (
     <View style={styles.root}>
@@ -371,7 +511,11 @@ onContinue?.(
               ]}
             >
               {/* Back button */}
-              <TouchableOpacity onPress={onBack} activeOpacity={0.7} style={styles.backBtn}>
+              <TouchableOpacity
+                onPress={onBack}
+                activeOpacity={0.7}
+                style={styles.backBtn}
+              >
                 <View style={styles.backIcon}>
                   <View style={styles.backArrow} />
                 </View>
@@ -390,7 +534,9 @@ onContinue?.(
                   </LinearGradient>
                 </View>
                 <Text style={styles.title}>Create account</Text>
-                <Text style={styles.subtitle}>Enter your details to get started</Text>
+                <Text style={styles.subtitle}>
+                  Enter your details to get started
+                </Text>
               </View>
 
               {/* Form */}
@@ -410,7 +556,11 @@ onContinue?.(
                         {
                           top: nameLabelTop,
                           fontSize: nameLabelSize,
-                          color: nameFocused ? '#A855F7' : nameError ? '#F87171' : 'rgba(255,255,255,0.45)',
+                          color: nameFocused
+                            ? '#A855F7'
+                            : nameError
+                            ? '#F87171'
+                            : 'rgba(255,255,255,0.45)',
                         },
                       ]}
                     >
@@ -425,7 +575,10 @@ onContinue?.(
                     <TextInput
                       style={styles.input}
                       value={name}
-                      onChangeText={(t) => { setName(t); if (nameError) setNameError(''); }}
+                      onChangeText={t => {
+                        setName(t);
+                        if (nameError) setNameError('');
+                      }}
                       onFocus={() => setNameFocused(true)}
                       onBlur={() => setNameFocused(false)}
                       autoCapitalize="words"
@@ -434,7 +587,9 @@ onContinue?.(
                       placeholderTextColor="transparent"
                     />
                   </View>
-                  {nameError ? <Text style={styles.errorText}>{nameError}</Text> : null}
+                  {nameError ? (
+                    <Text style={styles.errorText}>{nameError}</Text>
+                  ) : null}
                 </View>
 
                 {/* Phone input */}
@@ -453,7 +608,11 @@ onContinue?.(
                         {
                           top: phoneLabelTop,
                           fontSize: phoneLabelSize,
-                          color: phoneFocused ? '#A855F7' : phoneError ? '#F87171' : 'rgba(255,255,255,0.45)',
+                          color: phoneFocused
+                            ? '#A855F7'
+                            : phoneError
+                            ? '#F87171'
+                            : 'rgba(255,255,255,0.45)',
                         },
                       ]}
                     >
@@ -467,9 +626,12 @@ onContinue?.(
                     <TextInput
                       style={[styles.input, styles.inputPhone]}
                       value={phone}
-                      onChangeText={(t) => {
+                      onChangeText={t => {
                         const digits = t.replace(/\D/g, '').slice(0, 10);
-                        const formatted = digits.length > 5 ? digits.slice(0, 5) + ' ' + digits.slice(5) : digits;
+                        const formatted =
+                          digits.length > 5
+                            ? digits.slice(0, 5) + ' ' + digits.slice(5)
+                            : digits;
                         setPhone(formatted);
                         if (phoneError) setPhoneError('');
                       }}
@@ -482,7 +644,9 @@ onContinue?.(
                       onSubmitEditing={handleContinue}
                     />
                   </View>
-                  {phoneError ? <Text style={styles.errorText}>{phoneError}</Text> : null}
+                  {phoneError ? (
+                    <Text style={styles.errorText}>{phoneError}</Text>
+                  ) : null}
                 </View>
 
                 <Text style={styles.terms}>
@@ -495,26 +659,40 @@ onContinue?.(
               {/* Continue button */}
               <TouchableOpacity
                 onPress={handleContinue}
-                activeOpacity={0.85}
-                disabled={loading}
+                activeOpacity={isReady ? 0.85 : 1}
+                disabled={loading || !isReady}
                 style={styles.btnWrapper}
               >
                 <LinearGradient
-                  colors={isReady ? ['#A855F7', '#6366F1', '#38BDF8'] : ['#2D2A6E', '#2D2A6E', '#2D2A6E']}
+                  colors={
+                    isReady
+                      ? ['#A855F7', '#6366F1', '#38BDF8']
+                      : ['#2D2A6E', '#2D2A6E', '#2D2A6E']
+                  }
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 0 }}
                   style={styles.continueBtn}
                 >
-                  {loading
-                    ? <ActivityIndicator color="#fff" size="small" />
-                    : <Text style={[styles.continueTxt, !isReady && styles.continueTxtDim]}>Continue</Text>
-                  }
+                  {loading ? (
+                    <ActivityIndicator color="#fff" size="small" />
+                  ) : (
+                    <Text
+                      style={[
+                        styles.continueTxt,
+                        !isReady && styles.continueTxtDim,
+                      ]}
+                    >
+                      Continue
+                    </Text>
+                  )}
                 </LinearGradient>
               </TouchableOpacity>
 
               {/* Sign in link */}
               <View style={styles.signinRow}>
-                <Text style={styles.signinLabel}>Already have an account? </Text>
+                <Text style={styles.signinLabel}>
+                  Already have an account?{' '}
+                </Text>
                 <TouchableOpacity onPress={onBack} activeOpacity={0.7}>
                   <Text style={styles.signinLink}>Sign in</Text>
                 </TouchableOpacity>
@@ -532,8 +710,11 @@ onContinue?.(
         statusBarTranslucent
         onRequestClose={closeModal}
       >
-        {/* Backdrop */}
-        <Pressable style={styles.modalBackdrop} onPress={closeModal} />
+        {/* Backdrop — disabled while verifying */}
+        <Pressable
+          style={styles.modalBackdrop}
+          onPress={otpLoading ? undefined : closeModal}
+        />
 
         {/* Sheet */}
         <Animated.View
@@ -560,7 +741,6 @@ onContinue?.(
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 1 }}
                 >
-                  {/* Phone icon (manual) */}
                   <View style={styles.phoneIconOuter}>
                     <View style={styles.phoneIconInner} />
                   </View>
@@ -577,7 +757,15 @@ onContinue?.(
 
             {/* OTP Input */}
             <Animated.View style={{ transform: [{ translateX: shakeAnim }] }}>
-              <OTPInput otp={otp} onOtpChange={(v) => { setOtp(v); if (otpError) setOtpError(''); }} hasError={!!otpError} />
+              <OTPInput
+                otp={otp}
+                onOtpChange={v => {
+                  setOtp(v);
+                  if (otpError) setOtpError('');
+                }}
+                hasError={!!otpError}
+                disabled={otpLoading}
+              />
             </Animated.View>
 
             {/* Error message */}
@@ -588,20 +776,32 @@ onContinue?.(
             {/* Verify button */}
             <TouchableOpacity
               onPress={handleVerifyOtp}
-              activeOpacity={0.85}
-              disabled={otpLoading}
+              activeOpacity={isOtpFilled ? 0.85 : 1}
+              disabled={otpLoading || !isOtpFilled}
               style={styles.btnWrapper}
             >
               <LinearGradient
-                colors={isOtpFilled ? ['#A855F7', '#6366F1', '#38BDF8'] : ['#2D2A6E', '#2D2A6E', '#2D2A6E']}
+                colors={
+                  isOtpFilled
+                    ? ['#A855F7', '#6366F1', '#38BDF8']
+                    : ['#2D2A6E', '#2D2A6E', '#2D2A6E']
+                }
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 0 }}
                 style={styles.continueBtn}
               >
-                {otpLoading
-                  ? <ActivityIndicator color="#fff" size="small" />
-                  : <Text style={[styles.continueTxt, !isOtpFilled && styles.continueTxtDim]}>Verify OTP</Text>
-                }
+                {otpLoading ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <Text
+                    style={[
+                      styles.continueTxt,
+                      !isOtpFilled && styles.continueTxtDim,
+                    ]}
+                  >
+                    Verify OTP
+                  </Text>
+                )}
               </LinearGradient>
             </TouchableOpacity>
 
@@ -610,18 +810,37 @@ onContinue?.(
               <Text style={styles.resendLabel}>Didn't receive the OTP? </Text>
               <TouchableOpacity
                 onPress={handleResend}
-                disabled={resendCooldown > 0}
+                disabled={resendCooldown > 0 || otpLoading}
                 activeOpacity={0.7}
               >
-                <Text style={[styles.resendLink, resendCooldown > 0 && styles.resendLinkDim]}>
-                  {resendCooldown > 0 ? `Resend in ${resendCooldown}s` : 'Resend'}
+                <Text
+                  style={[
+                    styles.resendLink,
+                    (resendCooldown > 0 || otpLoading) && styles.resendLinkDim,
+                  ]}
+                >
+                  {resendCooldown > 0
+                    ? `Resend in ${resendCooldown}s`
+                    : 'Resend'}
                 </Text>
               </TouchableOpacity>
             </View>
 
             {/* Change number */}
-            <TouchableOpacity onPress={closeModal} activeOpacity={0.7} style={styles.changeNumBtn}>
-              <Text style={styles.changeNumText}>Change phone number</Text>
+            <TouchableOpacity
+              onPress={closeModal}
+              activeOpacity={0.7}
+              disabled={otpLoading}
+              style={styles.changeNumBtn}
+            >
+              <Text
+                style={[
+                  styles.changeNumText,
+                  otpLoading && { opacity: 0.4 },
+                ]}
+              >
+                Change phone number
+              </Text>
             </TouchableOpacity>
           </LinearGradient>
         </Animated.View>
@@ -638,116 +857,272 @@ const styles = StyleSheet.create({
   content: { flex: 1, paddingHorizontal: 24, paddingTop: 16 },
 
   bgCircle1: {
-    position: 'absolute', width: 300, height: 300, borderRadius: 150,
-    backgroundColor: '#3730A3', opacity: 0.12, top: -60, right: -60,
+    position: 'absolute',
+    width: 300,
+    height: 300,
+    borderRadius: 150,
+    backgroundColor: '#3730A3',
+    opacity: 0.12,
+    top: -60,
+    right: -60,
   },
   bgCircle2: {
-    position: 'absolute', width: 200, height: 200, borderRadius: 100,
-    backgroundColor: '#6366F1', opacity: 0.08, bottom: 200, left: -50,
+    position: 'absolute',
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    backgroundColor: '#6366F1',
+    opacity: 0.08,
+    bottom: 200,
+    left: -50,
   },
 
   backBtn: { marginBottom: 24, alignSelf: 'flex-start' },
   backIcon: {
-    width: 40, height: 40, borderRadius: 12, borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.15)', alignItems: 'center',
-    justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.06)',
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.06)',
   },
   backArrow: {
-    width: 10, height: 10, borderLeftWidth: 2, borderBottomWidth: 2,
+    width: 10,
+    height: 10,
+    borderLeftWidth: 2,
+    borderBottomWidth: 2,
     borderColor: 'rgba(255,255,255,0.7)',
     transform: [{ rotate: '45deg' }, { translateX: 2 }],
   },
 
   header: { marginBottom: 36 },
   logoMark: { marginBottom: 20 },
-  logoGrad: { width: 52, height: 52, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  logoGrad: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   logoIcon: { fontSize: 24, color: '#fff', fontWeight: '700' },
-  title: { fontSize: 28, fontWeight: '700', color: '#FFFFFF', marginBottom: 8, letterSpacing: 0.2 },
+  title: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    marginBottom: 8,
+    letterSpacing: 0.2,
+  },
   subtitle: { fontSize: 14, color: 'rgba(255,255,255,0.5)', lineHeight: 20 },
 
   form: { marginBottom: 28, gap: 16 },
   fieldWrapper: { gap: 6 },
 
   inputBox: {
-    height: 58, borderRadius: 14, borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)', backgroundColor: 'rgba(255,255,255,0.07)',
-    flexDirection: 'row', alignItems: 'flex-end', paddingBottom: 10,
-    paddingHorizontal: 16, position: 'relative', overflow: 'hidden',
+    height: 58,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    paddingBottom: 10,
+    paddingHorizontal: 16,
+    position: 'relative',
+    overflow: 'hidden',
   },
-  inputBoxFocused: { borderColor: '#A855F7', backgroundColor: 'rgba(168,85,247,0.08)' },
-  inputBoxError: { borderColor: '#F87171', backgroundColor: 'rgba(248,113,113,0.06)' },
+  inputBoxFocused: {
+    borderColor: '#A855F7',
+    backgroundColor: 'rgba(168,85,247,0.08)',
+  },
+  inputBoxError: {
+    borderColor: '#F87171',
+    backgroundColor: 'rgba(248,113,113,0.06)',
+  },
 
-  floatLabel: { position: 'absolute', left: 48, fontWeight: '400', letterSpacing: 0.1 },
+  floatLabel: {
+    position: 'absolute',
+    left: 48,
+    fontWeight: '400',
+    letterSpacing: 0.1,
+  },
   floatLabelPhone: { left: 100 },
 
   inputIconWrap: { marginRight: 10, marginBottom: 2 },
   personIcon: { alignItems: 'center' },
-  personHead: { width: 10, height: 10, borderRadius: 5, backgroundColor: 'rgba(255,255,255,0.35)', marginBottom: 2 },
-  personBody: { width: 14, height: 7, borderTopLeftRadius: 7, borderTopRightRadius: 7, backgroundColor: 'rgba(255,255,255,0.35)' },
+  personHead: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: 'rgba(255,255,255,0.35)',
+    marginBottom: 2,
+  },
+  personBody: {
+    width: 14,
+    height: 7,
+    borderTopLeftRadius: 7,
+    borderTopRightRadius: 7,
+    backgroundColor: 'rgba(255,255,255,0.35)',
+  },
 
-  countryPill: { flexDirection: 'row', alignItems: 'center', marginRight: 4, paddingRight: 10, marginBottom: 2 },
+  countryPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: 4,
+    paddingRight: 10,
+    marginBottom: 2,
+  },
   countryFlag: { fontSize: 16, marginRight: 4 },
-  countryCode: { fontSize: 15, color: 'rgba(255,255,255,0.75)', fontWeight: '500', marginRight: 8 },
+  countryCode: {
+    fontSize: 15,
+    color: 'rgba(255,255,255,0.75)',
+    fontWeight: '500',
+    marginRight: 8,
+  },
   divider: { width: 1, height: 18, backgroundColor: 'rgba(255,255,255,0.2)' },
 
-  input: { flex: 1, fontSize: 15, color: '#FFFFFF', padding: 0, margin: 0, fontWeight: '400', letterSpacing: 0.3 },
+  input: {
+    flex: 1,
+    fontSize: 15,
+    color: '#FFFFFF',
+    padding: 0,
+    margin: 0,
+    fontWeight: '400',
+    letterSpacing: 0.3,
+  },
   inputPhone: { marginLeft: 10, letterSpacing: 1 },
   errorText: { fontSize: 12, color: '#F87171', marginLeft: 4 },
 
-  terms: { fontSize: 12, color: 'rgba(255,255,255,0.35)', lineHeight: 18, marginTop: 4 },
+  terms: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.35)',
+    lineHeight: 18,
+    marginTop: 4,
+  },
   termsLink: { color: '#A855F7', fontWeight: '500' },
 
   btnWrapper: { borderRadius: 14, overflow: 'hidden', marginBottom: 20 },
-  continueBtn: { height: 54, alignItems: 'center', justifyContent: 'center', borderRadius: 14 },
-  continueTxt: { fontSize: 16, fontWeight: '600', color: '#FFFFFF', letterSpacing: 0.3 },
+  continueBtn: {
+    height: 54,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 14,
+  },
+  continueTxt: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    letterSpacing: 0.3,
+  },
   continueTxtDim: { color: 'rgba(255,255,255,0.4)' },
 
-  signinRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center' },
+  signinRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   signinLabel: { fontSize: 13, color: 'rgba(255,255,255,0.4)' },
   signinLink: { fontSize: 13, color: '#A855F7', fontWeight: '600' },
 
   // ─── Modal ───────────────────────────────────────────────────────────────
   modalBackdrop: {
-    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     backgroundColor: 'rgba(0,0,0,0.6)',
   },
   modalSheet: {
-    position: 'absolute', bottom: 0, left: 0, right: 0,
-    borderTopLeftRadius: 28, borderTopRightRadius: 28, overflow: 'hidden',
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    overflow: 'hidden',
   },
   modalGrad: {
-    paddingHorizontal: 24, paddingTop: 12, paddingBottom: Platform.OS === 'ios' ? 36 : 24,
+    paddingHorizontal: 24,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === 'ios' ? 36 : 24,
   },
   dragHandle: {
-    width: 40, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.2)',
-    alignSelf: 'center', marginBottom: 24,
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    alignSelf: 'center',
+    marginBottom: 24,
   },
 
   modalHeader: { alignItems: 'center', marginBottom: 4 },
   modalIconWrap: { marginBottom: 16 },
-  modalIcon: { width: 56, height: 56, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-  phoneIconOuter: {
-    width: 24, height: 28, borderRadius: 4, borderWidth: 2,
-    borderColor: '#fff', alignItems: 'center', justifyContent: 'flex-end', paddingBottom: 3,
+  modalIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  phoneIconInner: { width: 8, height: 2, borderRadius: 1, backgroundColor: '#fff' },
+  phoneIconOuter: {
+    width: 24,
+    height: 28,
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    paddingBottom: 3,
+  },
+  phoneIconInner: {
+    width: 8,
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: '#fff',
+  },
 
-  modalTitle: { fontSize: 22, fontWeight: '700', color: '#FFFFFF', marginBottom: 8, textAlign: 'center' },
-  modalSubtitle: { fontSize: 14, color: 'rgba(255,255,255,0.5)', textAlign: 'center', lineHeight: 22 },
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.5)',
+    textAlign: 'center',
+    lineHeight: 22,
+  },
   modalPhone: { color: '#A855F7', fontWeight: '600' },
 
   otpErrorText: {
-    fontSize: 13, color: '#F87171', textAlign: 'center',
-    marginTop: -12, marginBottom: 14, letterSpacing: 0.2,
+    fontSize: 13,
+    color: '#F87171',
+    textAlign: 'center',
+    marginTop: -12,
+    marginBottom: 14,
+    letterSpacing: 0.2,
   },
 
-  resendRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginBottom: 12 },
+  resendRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
   resendLabel: { fontSize: 13, color: 'rgba(255,255,255,0.4)' },
   resendLink: { fontSize: 13, color: '#A855F7', fontWeight: '600' },
   resendLinkDim: { color: 'rgba(168,85,247,0.45)' },
 
   changeNumBtn: { alignItems: 'center', paddingVertical: 4 },
-  changeNumText: { fontSize: 13, color: 'rgba(255,255,255,0.35)', textDecoration: 'underline' } as any,
+  changeNumText: {
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.35)',
+    textDecorationLine: 'underline',
+  },
 });
 
 export default LoginScreen;
