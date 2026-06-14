@@ -7,8 +7,14 @@ import {
   setBudget as fsSetBudget,
   updateBudget as fsUpdateBudget,
   addExpense as fsAddExpense,
-} from '../services/walletService';
+  fetchAvailableMonths,
+} from '../services/walletServiceoffline';
 import { Expense, AddExpensePayload, ExpenseCategory } from '../component/types';
+
+const currentMonth = (): string => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+};
 
 export interface BudgetStore {
   budget: number;
@@ -19,24 +25,35 @@ export interface BudgetStore {
   remaining: number;
   budgetUsedPercent: number;
   categoryTotals: Partial<Record<ExpenseCategory, number>>;
+  selectedMonth: string;
+  isCurrentMonth: boolean;
+  availableMonths: string[];
+  setSelectedMonth: (month: string) => void;
   handleSetBudget: (amount: number) => Promise<void>;
-  handleUpdateBudget: (amount: number) => Promise<void>;  // ← was missing
+  handleUpdateBudget: (amount: number) => Promise<void>;
   handleAddExpense: (payload: AddExpensePayload) => Promise<void>;
 }
 
 const useBudgetStore = (): BudgetStore => {
-  // ── State ── (hooks must come before any logic)
+  // ── State ──
+  const [selectedMonth, setSelectedMonth] = useState<string>(currentMonth());
   const [budget, setBudgetState] = useState<number>(0);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [budgetReady, setBudgetReady] = useState(false);
   const [expensesReady, setExpensesReady] = useState(false);
+  const [availableMonths, setAvailableMonths] = useState<string[]>([currentMonth()]);
 
   const loading = !budgetReady || !expensesReady;
+  const isCurrentMonth = selectedMonth === currentMonth();
 
-  // ── Listeners ─────────────────────────────
+  // ── Listeners — re-subscribe whenever selectedMonth changes ──
   useEffect(() => {
+    setBudgetReady(false);
+    setExpensesReady(false);
+
     const unsubBudget = subscribeBudget(
+      selectedMonth,
       (val: number) => {
         setBudgetState(val);
         setBudgetReady(true);
@@ -48,6 +65,7 @@ const useBudgetStore = (): BudgetStore => {
     );
 
     const unsubExpenses = subscribeMonthlyExpenses(
+      selectedMonth,
       (items: Expense[]) => {
         setExpenses(items);
         setExpensesReady(true);
@@ -62,7 +80,21 @@ const useBudgetStore = (): BudgetStore => {
       unsubBudget();
       unsubExpenses();
     };
+  }, [selectedMonth]);
+
+  // ── Load available months once (and refresh after writes) ──
+  const refreshAvailableMonths = useCallback(async () => {
+    try {
+      const months = await fetchAvailableMonths();
+      setAvailableMonths(months);
+    } catch (e) {
+      // Non-fatal — month picker just shows current month
+    }
   }, []);
+
+  useEffect(() => {
+    refreshAvailableMonths();
+  }, [refreshAvailableMonths]);
 
   // ── Derived values ─────────────────────────
   const totalSpent = useMemo(
@@ -89,19 +121,33 @@ const useBudgetStore = (): BudgetStore => {
   }, [expenses]);
 
   // ── Actions ────────────────────────────────
+
+  // "Set Budget" button — new budget cycle, resets expenses, creates
+  // fresh expense ids going forward. Only meaningful for current month.
   const handleSetBudget = useCallback(
-    async (amount: number): Promise<void> => { await fsSetBudget(amount); },
-    [],
+    async (amount: number): Promise<void> => {
+      await fsSetBudget(amount, selectedMonth);
+      await refreshAvailableMonths();
+    },
+    [selectedMonth, refreshAvailableMonths],
   );
 
+  // Tap budget value on card — edits the budget for the currently
+  // viewed month in place, no reset.
   const handleUpdateBudget = useCallback(
-    async (amount: number): Promise<void> => { await fsUpdateBudget(amount); },
-    [],
+    async (amount: number): Promise<void> => {
+      await fsUpdateBudget(amount, selectedMonth);
+      await refreshAvailableMonths();
+    },
+    [selectedMonth, refreshAvailableMonths],
   );
 
   const handleAddExpense = useCallback(
-    async (payload: AddExpensePayload): Promise<void> => { await fsAddExpense(payload); },
-    [],
+    async (payload: AddExpensePayload): Promise<void> => {
+      await fsAddExpense(payload);
+      await refreshAvailableMonths();
+    },
+    [refreshAvailableMonths],
   );
 
   return {
@@ -113,6 +159,10 @@ const useBudgetStore = (): BudgetStore => {
     remaining,
     budgetUsedPercent,
     categoryTotals,
+    selectedMonth,
+    isCurrentMonth,
+    availableMonths,
+    setSelectedMonth,
     handleSetBudget,
     handleUpdateBudget,
     handleAddExpense,

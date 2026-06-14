@@ -1,9 +1,3 @@
-// WalletScreen.tsx
-// ─────────────────────────────────────────────
-// Fully dynamic — all data from Firestore via useBudgetStore.
-// No hardcoded transaction or budget values.
-// ─────────────────────────────────────────────
-
 import React, { useState, useCallback, memo, FC } from 'react';
 import {
   View,
@@ -12,6 +6,9 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
+  Modal,
+  FlatList,
+  TouchableWithoutFeedback,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import Icon from 'react-native-vector-icons/Ionicons';
@@ -29,7 +26,7 @@ const getIcon = (category: ExpenseCategory): string => {
     case 'Food':      return 'fast-food-outline';
     case 'Shopping':  return 'bag-handle-outline';
     case 'Transport': return 'car-sport-outline';
-    default:          return 'wallet-outline';
+    default:          return 'pricetag-outline';
   }
 };
 
@@ -54,7 +51,7 @@ const getCategoryGradient = (category: ExpenseCategory): string[] => {
 // ── Format helpers ────────────────────────────
 
 const fmt = (n: number): string =>
-  n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const formatDisplayDate = (dateStr: string): string => {
   if (!dateStr) return '';
@@ -70,6 +67,27 @@ const formatDisplayDate = (dateStr: string): string => {
     month: 'short',
     year: 'numeric',
   });
+};
+
+// "YYYY-MM" -> "January 2026"
+const formatMonthLabel = (monthStr: string): string => {
+  if (!monthStr) return '';
+  const [year, month] = monthStr.split('-').map(Number);
+  const d = new Date(year, month - 1, 1);
+  return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+};
+
+// "YYYY-MM" -> "Jan 2026"
+const formatMonthShort = (monthStr: string): string => {
+  if (!monthStr) return '';
+  const [year, month] = monthStr.split('-').map(Number);
+  const d = new Date(year, month - 1, 1);
+  return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+};
+
+const getCurrentMonth = (): string => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 };
 
 // ── CategoryItem sub-component ────────────────
@@ -95,7 +113,7 @@ const CategoryItem: FC<CategoryItemProps> = memo(
             <Text style={styles.categoryTitle}>{title}</Text>
           </View>
           <View style={styles.categoryRight}>
-            <Text style={styles.categoryAmount}>${fmt(amount)}</Text>
+            <Text style={styles.categoryAmount}>₹{fmt(amount)}</Text>
             <Text style={styles.categoryPercent}>{percent}%</Text>
           </View>
         </View>
@@ -125,6 +143,10 @@ const WalletScreen: FC = () => {
     remaining,
     budgetUsedPercent,
     categoryTotals,
+    selectedMonth,
+    isCurrentMonth,
+    availableMonths,
+    setSelectedMonth,
     handleSetBudget,
     handleUpdateBudget,
     handleAddExpense,
@@ -133,22 +155,37 @@ const WalletScreen: FC = () => {
   const [budgetModalVisible, setBudgetModalVisible] = useState(false);
   const [expenseModalVisible, setExpenseModalVisible] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
+  const [monthPickerVisible, setMonthPickerVisible] = useState(false);
 
-  // Opens modal in CREATE mode (Set Budget button)
+  // Opens modal in CREATE mode (Set Budget button) — only for current month
   const openBudgetModal = useCallback(() => {
+    if (!isCurrentMonth) return;
     setIsEditMode(false);
     setBudgetModalVisible(true);
-  }, []);
+  }, [isCurrentMonth]);
 
-  // Opens modal in EDIT mode (tap budget value on card)
+  // Opens modal in EDIT mode (tap budget value on card) — edits whichever
+  // month is currently selected, in place.
   const openEditBudgetModal = useCallback(() => {
     setIsEditMode(true);
     setBudgetModalVisible(true);
   }, []);
 
   const closeBudgetModal  = useCallback(() => setBudgetModalVisible(false), []);
-  const openExpenseModal  = useCallback(() => setExpenseModalVisible(true), []);
+
+  const openExpenseModal  = useCallback(() => {
+    if (!isCurrentMonth) return;
+    setExpenseModalVisible(true);
+  }, [isCurrentMonth]);
   const closeExpenseModal = useCallback(() => setExpenseModalVisible(false), []);
+
+  const openMonthPicker  = useCallback(() => setMonthPickerVisible(true), []);
+  const closeMonthPicker = useCallback(() => setMonthPickerVisible(false), []);
+
+  const selectMonth = useCallback((month: string) => {
+    setSelectedMonth(month);
+    setMonthPickerVisible(false);
+  }, [setSelectedMonth]);
 
   // Derived alert flags
   const isOverBudget  = budget > 0 && totalSpent > budget;
@@ -185,7 +222,7 @@ const WalletScreen: FC = () => {
   const pillColor = isOverBudget ? '#FCA5A5'     : isNearBudget ? '#FCD34D'      : '#4ADE80';
   const pillBg    = isOverBudget ? 'rgba(239,68,68,0.18)' : isNearBudget ? 'rgba(245,158,11,0.18)' : 'rgba(74,222,128,0.15)';
   const pillText  = isOverBudget
-    ? `Over budget by $${fmt(Math.abs(remaining))}`
+    ? `Over budget by ₹${fmt(Math.abs(remaining))}`
     : `${budgetUsedPercent}% of budget used`;
 
   return (
@@ -223,7 +260,18 @@ const WalletScreen: FC = () => {
 
           {/* Card Header */}
           <View style={styles.cardHeader}>
-            <Text style={styles.month}>This Month</Text>
+            {/* This Month — tappable, opens month picker */}
+            <TouchableOpacity
+              onPress={openMonthPicker}
+              activeOpacity={0.7}
+              style={styles.monthTouchable}
+            >
+              <Text style={styles.month}>
+                {isCurrentMonth ? 'This Month' : formatMonthLabel(selectedMonth)}
+              </Text>
+              <Icon name="chevron-down" size={14} color="rgba(255,255,255,0.65)" style={styles.monthChevron} />
+            </TouchableOpacity>
+
             <View style={[
               styles.cashBadge,
               isOverBudget && styles.cashBadgeDanger,
@@ -243,12 +291,14 @@ const WalletScreen: FC = () => {
           </View>
 
           {/* Spent Amount — red when over budget */}
-          <Text style={styles.amountLabel}>Spent this month</Text>
+          <Text style={styles.amountLabel}>
+            {isCurrentMonth ? 'Spent this month' : `Spent in ${formatMonthShort(selectedMonth)}`}
+          </Text>
           <Text style={[
             styles.amount,
             isOverBudget && styles.amountDanger,
           ]}>
-            ${fmt(totalSpent)}
+            ₹{fmt(totalSpent)}
           </Text>
 
           {/* Smart pill — green / amber / red */}
@@ -291,7 +341,7 @@ const WalletScreen: FC = () => {
           {/* Bottom row — Budget (tappable) | Remaining */}
           <View style={styles.bottomRow}>
 
-            {/* Budget — tap to edit */}
+            {/* Budget — tap to edit (works for any month, in-place edit) */}
             <View style={styles.bottomRowItem}>
               <Text style={styles.label}>Budget</Text>
               <TouchableOpacity
@@ -300,16 +350,14 @@ const WalletScreen: FC = () => {
                 style={styles.editableRow}
               >
                 <Text style={styles.value}>
-                  {budget > 0 ? `$${fmt(budget)}` : '—'}
+                  {budget > 0 ? `₹${fmt(budget)}` : '—'}
                 </Text>
-                {budget > 0 && (
-                  <Icon
-                    name="pencil"
-                    size={13}
-                    color="#60A5FA"
-                    style={styles.pencilIcon}
-                  />
-                )}
+                <Icon
+                  name="pencil"
+                  size={13}
+                  color="#60A5FA"
+                  style={styles.pencilIcon}
+                />
               </TouchableOpacity>
             </View>
 
@@ -328,8 +376,8 @@ const WalletScreen: FC = () => {
                 {budget <= 0
                   ? '—'
                   : remaining >= 0
-                    ? `$${fmt(remaining)}`
-                    : `-$${fmt(Math.abs(remaining))}`
+                    ? `₹${fmt(remaining)}`
+                    : `-₹${fmt(Math.abs(remaining))}`
                 }
               </Text>
             </View>
@@ -346,11 +394,25 @@ const WalletScreen: FC = () => {
             </View>
           )}
 
+          {/* Read-only banner for past months */}
+          {!isCurrentMonth && (
+            <View style={styles.readOnlyBanner}>
+              <Icon name="time-outline" size={15} color="#93C5FD" />
+              <Text style={styles.readOnlyBannerText}>
+                Viewing {formatMonthLabel(selectedMonth)} — read-only
+              </Text>
+            </View>
+          )}
+
         </LinearGradient>
 
         {/* ── Action Buttons ── */}
         <View style={styles.actionRow}>
-          <TouchableOpacity style={styles.actionTouchable} onPress={openExpenseModal}>
+          <TouchableOpacity
+            style={[styles.actionTouchable, !isCurrentMonth && styles.actionDisabled]}
+            onPress={openExpenseModal}
+            disabled={!isCurrentMonth}
+          >
             <LinearGradient
               colors={['#7C3AED', '#6D28D9']}
               start={{ x: 0, y: 0 }}
@@ -365,7 +427,11 @@ const WalletScreen: FC = () => {
             </LinearGradient>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.actionTouchable} onPress={openBudgetModal}>
+          <TouchableOpacity
+            style={[styles.actionTouchable, !isCurrentMonth && styles.actionDisabled]}
+            onPress={openBudgetModal}
+            disabled={!isCurrentMonth}
+          >
             <LinearGradient
               colors={['#2563EB', '#1D4ED8']}
               start={{ x: 0, y: 0 }}
@@ -376,14 +442,16 @@ const WalletScreen: FC = () => {
                 <Icon name="wallet" color="#fff" size={26} />
               </View>
               <Text style={styles.actionTitle}>Set Budget</Text>
-              <Text style={styles.actionSub}>Monthly budget</Text>
+              <Text style={styles.actionSub}>New budget cycle</Text>
             </LinearGradient>
           </TouchableOpacity>
         </View>
 
         {/* ── Recent Transactions ── */}
         <View style={styles.sectionRow}>
-          <Text style={styles.sectionTitle}>Recent Transactions</Text>
+          <Text style={styles.sectionTitle}>
+            {isCurrentMonth ? 'Recent Transactions' : `${formatMonthShort(selectedMonth)} Transactions`}
+          </Text>
           <TouchableOpacity style={styles.seeAllButton}>
             <Text style={styles.seeAll}>See All</Text>
             <Icon name="chevron-forward" size={14} color="#60A5FA" />
@@ -393,7 +461,9 @@ const WalletScreen: FC = () => {
         {expenses.length === 0 ? (
           <View style={styles.emptyBox}>
             <Icon name="receipt-outline" size={36} color="#1E3A8A" />
-            <Text style={styles.emptyText}>No expenses yet this month</Text>
+            <Text style={styles.emptyText}>
+              {isCurrentMonth ? 'No expenses yet this month' : 'No expenses for this month'}
+            </Text>
           </View>
         ) : (
           <View style={styles.transactionContainer}>
@@ -420,7 +490,7 @@ const WalletScreen: FC = () => {
                   </View>
                   <View style={styles.transactionRight}>
                     <Text style={styles.transactionAmount}>
-                      -${fmt(item.amount)}
+                      -₹{fmt(item.amount)}
                     </Text>
                     <View style={[styles.badge, { backgroundColor: getColor(item.category) + '22' }]}>
                       <View style={[styles.badgeDot, { backgroundColor: getColor(item.category) }]} />
@@ -466,12 +536,72 @@ const WalletScreen: FC = () => {
         onUpdate={handleUpdateBudget}
         currentBudget={budget}
         isEditMode={isEditMode}
+        monthLabel={formatMonthShort(selectedMonth)}
       />
       <AddExpenseModal
         visible={expenseModalVisible}
         onClose={closeExpenseModal}
         onAdd={handleAddExpense}
       />
+
+      {/* ── Month Picker ── */}
+      <Modal
+        transparent
+        visible={monthPickerVisible}
+        animationType="fade"
+        onRequestClose={closeMonthPicker}
+        statusBarTranslucent
+      >
+        <TouchableWithoutFeedback onPress={closeMonthPicker}>
+          <View style={styles.monthOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.monthSheet}>
+                <View style={styles.monthSheetHeader}>
+                  <Text style={styles.monthSheetTitle}>Select Month</Text>
+                  <TouchableOpacity onPress={closeMonthPicker} style={styles.monthCloseBtn}>
+                    <Icon name="close" size={18} color="#94A3B8" />
+                  </TouchableOpacity>
+                </View>
+                <FlatList
+                  data={availableMonths}
+                  keyExtractor={(item) => item}
+                  style={styles.monthList}
+                  renderItem={({ item }) => {
+                    const isSelected = item === selectedMonth;
+                    const isThisMonth = item === getCurrentMonth();
+                    return (
+                      <TouchableOpacity
+                        style={[styles.monthRow, isSelected && styles.monthRowSelected]}
+                        onPress={() => selectMonth(item)}
+                        activeOpacity={0.7}
+                      >
+                        <View style={styles.monthRowLeft}>
+                          <Icon
+                            name="calendar-outline"
+                            size={18}
+                            color={isSelected ? '#60A5FA' : '#475569'}
+                          />
+                          <Text style={[styles.monthRowText, isSelected && styles.monthRowTextSelected]}>
+                            {formatMonthLabel(item)}
+                          </Text>
+                          {isThisMonth && (
+                            <View style={styles.currentMonthTag}>
+                              <Text style={styles.currentMonthTagText}>Current</Text>
+                            </View>
+                          )}
+                        </View>
+                        {isSelected && (
+                          <Icon name="checkmark-circle" size={18} color="#60A5FA" />
+                        )}
+                      </TouchableOpacity>
+                    );
+                  }}
+                />
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -499,6 +629,8 @@ const styles = StyleSheet.create({
   cardCircle2:     { position: 'absolute', width: 120, height: 120, borderRadius: 60, backgroundColor: 'rgba(255,255,255,0.04)', bottom: -20, left: 20 },
 
   cardHeader:      { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  monthTouchable:  { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  monthChevron:    { marginTop: 1 },
   month:           { color: 'rgba(255,255,255,0.65)', fontSize: 13, fontWeight: '500', textTransform: 'uppercase', letterSpacing: 1 },
   cashBadge:       { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.12)', paddingHorizontal: 11, paddingVertical: 6, borderRadius: 20, gap: 5 },
   cashBadgeDanger: { backgroundColor: 'rgba(239,68,68,0.2)' },
@@ -542,8 +674,19 @@ const styles = StyleSheet.create({
   },
   overBudgetBannerText: { color: '#FCA5A5', fontSize: 13, fontWeight: '600', flex: 1 },
 
+  // Read-only banner for past months
+  readOnlyBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 7,
+    backgroundColor: 'rgba(59,130,246,0.15)',
+    borderWidth: 1, borderColor: 'rgba(59,130,246,0.3)',
+    borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10,
+    marginTop: 14,
+  },
+  readOnlyBannerText: { color: '#93C5FD', fontSize: 13, fontWeight: '600', flex: 1 },
+
   actionRow:       { flexDirection: 'row', gap: 12, marginTop: 18 },
   actionTouchable: { flex: 1, borderRadius: 22 },
+  actionDisabled:  { opacity: 0.4 },
   actionCard:      { borderRadius: 22, padding: 18 },
   actionIconWrap:  { width: 44, height: 44, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.15)', justifyContent: 'center', alignItems: 'center', marginBottom: 12 },
   actionTitle:     { color: '#fff', fontSize: 16, fontWeight: '700', letterSpacing: -0.2 },
@@ -581,4 +724,38 @@ const styles = StyleSheet.create({
   categoryFill:      { height: '100%', borderRadius: 10 },
   categoryPercent:   { color: '#64748B', fontSize: 11, fontWeight: '500' },
   categoryAmount:    { color: '#F1F5F9', fontWeight: '700', fontSize: 15 },
+
+  // ── Month Picker ──
+  monthOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.65)',
+    justifyContent: 'flex-end',
+  },
+  monthSheet: {
+    backgroundColor: '#0C1A45', borderTopLeftRadius: 28, borderTopRightRadius: 28,
+    borderWidth: 1, borderColor: '#1E3A8A', paddingTop: 16, paddingHorizontal: 16,
+    paddingBottom: 24, maxHeight: '60%',
+  },
+  monthSheetHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    marginBottom: 12, paddingHorizontal: 4,
+  },
+  monthSheetTitle: { color: '#F1F5F9', fontSize: 18, fontWeight: '800' },
+  monthCloseBtn: {
+    width: 30, height: 30, borderRadius: 15, backgroundColor: '#162044',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  monthList: { marginTop: 4 },
+  monthRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingVertical: 14, paddingHorizontal: 12, borderRadius: 14, marginBottom: 4,
+  },
+  monthRowSelected: { backgroundColor: 'rgba(96,165,250,0.12)' },
+  monthRowLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  monthRowText: { color: '#94A3B8', fontSize: 15, fontWeight: '600' },
+  monthRowTextSelected: { color: '#F1F5F9' },
+  currentMonthTag: {
+    backgroundColor: 'rgba(74,222,128,0.15)', paddingHorizontal: 8, paddingVertical: 2,
+    borderRadius: 10,
+  },
+  currentMonthTagText: { color: '#4ADE80', fontSize: 10, fontWeight: '700' },
 });

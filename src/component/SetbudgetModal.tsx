@@ -12,10 +12,11 @@ import Icon from 'react-native-vector-icons/Ionicons';
 interface Props {
   visible: boolean;
   onClose: () => void;
-  onSave: (amount: number) => Promise<void>;       // create (new)
-  onUpdate?: (amount: number) => Promise<void>;    // edit (same doc)
+  onSave: (amount: number) => Promise<void>;       // create (new cycle)
+  onUpdate?: (amount: number) => Promise<void>;    // edit (same cycle)
   currentBudget?: number;
   isEditMode?: boolean;                            // ← driven by parent
+  monthLabel?: string;                             // e.g. "Jan 2026"
 }
 
 const SetBudgetModal: FC<Props> = ({
@@ -25,6 +26,7 @@ const SetBudgetModal: FC<Props> = ({
   onUpdate,
   currentBudget = 0,
   isEditMode = false,
+  monthLabel,
 }) => {
   const [amount, setAmount] = useState('');
   const [saving, setSaving] = useState(false);
@@ -48,9 +50,9 @@ const SetBudgetModal: FC<Props> = ({
     setSaving(true);
     try {
       if (isEditMode && onUpdate) {
-        await onUpdate(parsed);   // ← update same doc
+        await onUpdate(parsed);   // ← update same cycle
       } else {
-        await onSave(parsed);     // ← set budget (merge)
+        await onSave(parsed);     // ← new budget cycle (resets expenses)
       }
       setAmount('');
       setInputError('');
@@ -97,14 +99,20 @@ const SetBudgetModal: FC<Props> = ({
               </Text>
               <Text style={styles.subtitle}>
                 {isEditMode
-                  ? `Updating from $${currentBudget.toLocaleString()}`
+                  ? `Updating ${monthLabel ? monthLabel + ' ' : ''}from ₹${currentBudget.toLocaleString('en-IN')}`
                   : currentBudget > 0
-                    ? `Current budget: $${currentBudget.toLocaleString()}`
+                    ? `Current budget: ₹${currentBudget.toLocaleString('en-IN')}`
                     : 'No budget set yet'}
               </Text>
 
+              {!isEditMode && currentBudget > 0 && (
+                <Text style={styles.warningText}>
+                  This will start a new budget cycle and reset this month's expenses.
+                </Text>
+              )}
+
               <View style={[styles.inputWrap, inputError ? styles.inputWrapError : undefined]}>
-                <Text style={styles.currencySign}>$</Text>
+                <Text style={styles.currencySign}>₹</Text>
                 <TextInput
                   style={styles.input}
                   placeholder="0.00"
@@ -179,12 +187,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center', marginBottom: 16,
   },
   title: { color: '#F1F5F9', fontSize: 22, fontWeight: '800', letterSpacing: -0.4, textAlign: 'center' },
-  subtitle: { color: '#475569', fontSize: 13, marginTop: 6, marginBottom: 24, textAlign: 'center' },
+  subtitle: { color: '#475569', fontSize: 13, marginTop: 6, marginBottom: 8, textAlign: 'center' },
+  warningText: { color: '#F59E0B', fontSize: 12, marginBottom: 16, textAlign: 'center', paddingHorizontal: 8 },
   inputWrap: {
     flexDirection: 'row', alignItems: 'center', width: '100%',
     backgroundColor: '#0A1230', borderRadius: 16, borderWidth: 1.5,
     borderColor: '#1E3A8A', paddingHorizontal: 16,
     paddingVertical: Platform.OS === 'ios' ? 14 : 8, gap: 8,
+    marginTop: 8,
   },
   inputWrapError: { borderColor: '#EF4444' },
   currencySign: { color: '#60A5FA', fontSize: 22, fontWeight: '700' },
